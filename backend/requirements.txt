@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+pydantic
+typing
+langchain-ollama
+langchain-core
+psycopg2-binary
+bcrypt
+python-multipart
+pypdf
+python-docx
+pymupdf
+pytesseract
