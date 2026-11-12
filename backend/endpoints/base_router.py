@@ -1,23 +1,16 @@
-import os
-from fastapi import APIRouter, HTTPException
-from interfaces.query_interfaces import SearchQuery, SearchResponse
+from fastapi import APIRouter
+from interfaces.query_interfaces import HealthResponse
 
 
 """
-Where main functionality endpoints go 
+Where main functionality endpoints go
 """
 
 
 # Initialise router
 router = APIRouter()
 
-# Test route 
-@router.post("/test")
-def test_endpoint():
-    try:
-        return {
-            "message": "success"
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error running test: {e}")
+# Health check route - confirms the API is up (used by Railway and the frontend)
+@router.get("/health", response_model=HealthResponse)
+def health_check() -> HealthResponse:
+    return HealthResponse(status="ok")

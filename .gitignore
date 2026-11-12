@@ -3,3 +3,9 @@ code_env/
 # Ignore all __pycache__ directories
 __pycache__/
 **/__pycache__/
+# Local environment files (copy from .env.example)
+.env
+
+# Frontend dependencies and build output
+node_modules/
+dist/
