@@ -1,0 +1,30 @@
+# Data collection sources.
+#
+# This is the only place sources are configured - add, remove or tweak sources
+# here without touching code. The file is validated on load (see
+# interfaces/source_config_interfaces.py): all URLs must be https and unknown
+# keys are rejected.
+#
+# Override the location with the SOURCES_CONFIG_PATH environment variable.
+
+web:
+  rss_feeds:
+    - key: krebsonsecurity
+      url: https://krebsonsecurity.com/feed/
+      site_name: Krebs on Security
+
+    - key: bleepingcomputer
+      url: https://www.bleepingcomputer.com/feed/
+      site_name: BleepingComputer
+
+    - key: github_blog
+      url: https://github.blog/feed/
+      site_name: The GitHub Blog
+
+social:
+  hacker_news:
+    # Free, key-less Algolia Hacker News search API: https://hn.algolia.com/api
+    search_url: https://hn.algolia.com/api/v1/search_by_date
+    item_url_template: https://news.ycombinator.com/item?id={item_id}
+    min_points: 50
+    max_items: 50
