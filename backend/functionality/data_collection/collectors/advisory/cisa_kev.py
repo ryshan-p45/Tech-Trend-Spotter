@@ -5,7 +5,7 @@ from functionality.data_collection.collectors.base import (
     BaseCollector, SourceFormatError, to_json_safe, truncate_content,
 )
 from functionality.data_collection.http_client import SourceHttpClient
-from interfaces.collection_interfaces import Advisory, build_item_id
+from interfaces.collection_interfaces import AffectedProduct, Advisory, build_item_id
 from interfaces.source_config_interfaces import CisaKevConfig
 
 """
@@ -76,14 +76,20 @@ class CisaKevCollector(BaseCollector):
             collected_at=collected_at,
             raw_payload=to_json_safe(record),
             cve_id=cve_id,
-            vendor=record.get("vendorProject") or None,
-            product=record.get("product") or None,
-            ecosystem=None,  # KEV covers commercial products as well as packages; no ecosystem field
+            affected=_affected_products(record),
             severity=None,   # KEV does not rate severity
             known_exploited=True,  # every KEV entry is exploited in the wild by definition
             known_ransomware_use=RANSOMWARE_USE_VALUES.get(record.get("knownRansomwareCampaignUse")),
             remediation_due_date=_parse_date(due_date) if due_date else None,
         )
+
+
+def _affected_products(record: dict[str, Any]) -> list[AffectedProduct]:
+    """KEV names exactly one vendor + product per entry. No ecosystem: KEV mostly covers commercial products."""
+    product = record.get("product")
+    if not product:
+        return []
+    return [AffectedProduct(vendor=record.get("vendorProject") or None, product=product, ecosystem=None)]
 
 
 def _parse_date(value: Any) -> date:

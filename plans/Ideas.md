@@ -56,7 +56,7 @@ collect → store → enrich → detect trends/categorise → match opportunitie
 
 | Stage | What it does | Status |
 |---|---|---|
-| Collect | Pull raw items from configured sources into the standard schema | Initial version done (RSS, Hacker News, CISA KEV) |
+| Collect | Pull raw items from configured sources into the standard schema | Initial version done (RSS, Hacker News, CISA KEV, GitHub Advisories) |
 | Store | Persist items in Postgres, de-duplicated by `item_id`, so trends can be tracked over time | Not started |
 | Enrich | Extract entities from each item: companies/vendors, products, technologies, CVE IDs | Not started |
 | Detect & categorise | Spot growing topics (volume/engagement over time) and map them to sub-categories | Not started |
@@ -80,8 +80,8 @@ collect → store → enrich → detect trends/categorise → match opportunitie
 - `created_at`
 
 ### Decisions and to-dos
-- [x] Add an `Advisory` item type to the collection schema (CVE ID, vendor, product, severity, ecosystem), alongside `WebArticle` and `SocialPost`. Do this **before** the storage schema is built.
-- [ ] Collectors for CISA KEV (done), GitHub Security Advisories and OSV/NVD. These are the strongest sources for finding potential clients.
+- [x] Add an `Advisory` item type to the collection schema (CVE ID, affected products with vendor/product/ecosystem, severity), alongside `WebArticle` and `SocialPost`. Do this **before** the storage schema is built.
+- [ ] Collectors for CISA KEV (done), GitHub Security Advisories (done) and OSV/NVD. These are the strongest sources for finding potential clients.
 - [ ] Define the services catalogue format and fill it with the consultancy's offerings.
 - [ ] Decide on the enrichment approach: LLM (Ollama, already in requirements), rules/keywords, or a mix.
 - [ ] Look for clients at the level of companies only, never individuals. Keep stripping personal data, as already happens with HN usernames.

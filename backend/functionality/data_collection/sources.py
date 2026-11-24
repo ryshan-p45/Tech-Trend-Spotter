@@ -3,7 +3,9 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from config import GITHUB_TOKEN
 from functionality.data_collection.collectors.advisory.cisa_kev import CisaKevCollector
+from functionality.data_collection.collectors.advisory.github_advisories import GitHubAdvisoriesCollector
 from functionality.data_collection.collectors.base import BaseCollector
 from functionality.data_collection.collectors.social.hacker_news import HackerNewsCollector
 from functionality.data_collection.collectors.web.rss_feed import RssFeedCollector
@@ -54,5 +56,9 @@ def build_collectors(config: SourcesConfig) -> list[BaseCollector]:
     cisa_kev = config.advisory.cisa_kev
     if cisa_kev is not None and cisa_kev.enabled:
         advisory_collectors.append(CisaKevCollector(cisa_kev))
+    github_advisories = config.advisory.github_advisories
+    if github_advisories is not None and github_advisories.enabled:
+        # Token is a secret, so it comes from the environment (config.py), never from sources.yaml
+        advisory_collectors.append(GitHubAdvisoriesCollector(github_advisories, api_token=GITHUB_TOKEN))
 
     return web_collectors + social_collectors + advisory_collectors

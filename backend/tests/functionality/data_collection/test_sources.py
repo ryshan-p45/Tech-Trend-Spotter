@@ -25,6 +25,8 @@ social:
 advisory:
   cisa_kev:
     feed_url: https://kev.test/feed.json
+  github_advisories:
+    api_url: https://api.github.test/advisories
 """
 
 
@@ -42,7 +44,7 @@ def test_shipped_sources_file_is_valid():
 
 def test_builds_only_enabled_collectors(tmp_path):
     collectors = build_collectors(load_sources_config(write_yaml(tmp_path, VALID_YAML)))
-    assert [collector.source_name for collector in collectors] == ["rss:blog_a", "hacker_news", "cisa_kev"]
+    assert [collector.source_name for collector in collectors] == ["rss:blog_a", "hacker_news", "cisa_kev", "github_advisories"]
 
 
 def test_disabled_hacker_news_is_not_built(tmp_path):
@@ -55,6 +57,12 @@ def test_disabled_cisa_kev_is_not_built(tmp_path):
     yaml_text = VALID_YAML.replace("  cisa_kev:\n", "  cisa_kev:\n    enabled: false\n")
     collectors = build_collectors(load_sources_config(write_yaml(tmp_path, yaml_text)))
     assert "cisa_kev" not in [collector.source_name for collector in collectors]
+
+
+def test_disabled_github_advisories_is_not_built(tmp_path):
+    yaml_text = VALID_YAML.replace("  github_advisories:\n", "  github_advisories:\n    enabled: false\n")
+    collectors = build_collectors(load_sources_config(write_yaml(tmp_path, yaml_text)))
+    assert "github_advisories" not in [collector.source_name for collector in collectors]
 
 
 def test_empty_file_means_no_sources(tmp_path):

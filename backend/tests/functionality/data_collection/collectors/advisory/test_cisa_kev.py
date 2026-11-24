@@ -56,15 +56,16 @@ def test_parses_entry_into_advisory():
     advisory = result.items[0]
     assert advisory.cve_id == "CVE-2026-133968"
     assert advisory.external_id == "CVE-2026-133968"
-    assert advisory.vendor == "Project MONAI"
-    assert advisory.product == "MONAI Label"
+    assert len(advisory.affected) == 1
+    assert advisory.affected[0].vendor == "Project MONAI"
+    assert advisory.affected[0].product == "MONAI Label"
+    assert advisory.affected[0].ecosystem is None
     assert advisory.title == "Project MONAI MONAI Label Path Traversal Vulnerability"
     assert str(advisory.url) == "https://nvd.nist.gov/vuln/detail/CVE-2026-133968"
     assert advisory.tags == ["CWE-24"]
     assert advisory.known_exploited is True
     assert advisory.known_ransomware_use is False
     assert advisory.severity is None
-    assert advisory.ecosystem is None
     assert advisory.remediation_due_date == TODAY + timedelta(days=3)
     assert advisory.published_at == datetime.combine(TODAY, datetime.min.time(), tzinfo=timezone.utc)
 
@@ -101,12 +102,17 @@ def test_invalid_entries_are_skipped_not_fatal():
     assert result.skipped_count == 4
 
 
+def test_entry_without_product_has_no_affected_products():
+    advisory = run_collector(catalog(kev_entry(product=""))).items[0]
+    assert advisory.affected == []
+
+
 def test_missing_optional_fields_become_null():
     entry = kev_entry(vendorProject="", dueDate=None, cwes=[])
     del entry["shortDescription"]
     advisory = run_collector(catalog(entry)).items[0]
 
-    assert advisory.vendor is None
+    assert advisory.affected[0].vendor is None
     assert advisory.content is None
     assert advisory.remediation_due_date is None
     assert advisory.tags == []

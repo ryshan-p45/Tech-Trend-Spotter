@@ -85,20 +85,27 @@ class SocialPost(CollectedItem):
     discussion_url: HttpUrl | None = Field(description="Link to the discussion thread on the platform. Null if unavailable")
 
 
+class AffectedProduct(BaseModel):
+    """One product or package affected by an advisory."""
+
+    vendor: str | None = Field(max_length=200, description="Company or project responsible for the product. Null if unknown (e.g. open-source packages)")
+    product: str = Field(min_length=1, max_length=200, description="Product or package name, e.g. 'MONAI Label' or 'wwbn/avideo'")
+    ecosystem: str | None = Field(max_length=50, description="Package ecosystem for open-source packages, e.g. 'npm' or 'pip'. Null when not applicable")
+
+
 class Advisory(CollectedItem):
     """
-    A structured vulnerability record. vendor/product/ecosystem identify who is
-    affected, which is the main input for finding potential clients.
-    One advisory = one CVE (or one source ID when no CVE exists yet).
+    A structured vulnerability record. `affected` lists who is affected, which
+    is the main input for finding potential clients.
+    One advisory = one item, even when it affects several products, so a
+    vulnerability is never counted twice when spotting trends.
     """
 
     source_type: Literal["advisory"] = "advisory"
     cve_id: str | None = Field(pattern=CVE_ID_PATTERN, description="CVE identifier, e.g. 'CVE-2026-1234'. Null when the advisory has no CVE yet")
-    vendor: str | None = Field(max_length=200, description="Company or project responsible for the affected product. Null if unknown")
-    product: str | None = Field(max_length=200, description="Affected product or package name. Null if unknown")
-    ecosystem: str | None = Field(max_length=50, description="Package ecosystem for open-source advisories, e.g. 'npm' or 'PyPI'. Null when not applicable")
+    affected: list[AffectedProduct] = Field(default_factory=list, description="Affected products/packages. Empty if the source names none")
     severity: Severity | None = Field(description="Normalised severity. Null when the source does not rate severity (e.g. CISA KEV)")
-    known_exploited: bool = Field(description="True when the vulnerability is confirmed to be exploited in the wild")
+    known_exploited: bool = Field(description="True when the source confirms exploitation in the wild. False means not confirmed, not 'safe'")
     known_ransomware_use: bool | None = Field(description="True if used in ransomware campaigns, False if not known to be. Null if the source does not say")
     remediation_due_date: date | None = Field(description="Deadline the source sets for applying a fix (CISA KEV 'dueDate'). Null if none")
 
