@@ -47,6 +47,7 @@ uvicorn main:app --reload
 | `COLLECTOR_USER_AGENT` | No | `TechTrendSpotterBot/0.1` | User-Agent sent to sources. Keep it generic: no names or emails |
 | `COLLECTOR_TIMEOUT_SECONDS` | No | `10` | Per-request timeout for external sources |
 | `SOURCES_CONFIG_PATH` | No | `functionality/data_collection/sources.yaml` | Which sources file to load (e.g. a different file per environment) |
+| `GITHUB_TOKEN` | No | — | Raises the GitHub Advisories rate limit from 60 to 5,000 requests/hour. Use a fine-grained token with **no** permissions (the data is public). Never logged |
 
 ---
 
@@ -111,6 +112,7 @@ sources.yaml ──► sources.py ──► collectors ──► SourceHttpClien
 | `collectors/web/rss_feed.py` | RSS/Atom feeds → `WebArticle` |
 | `collectors/social/hacker_news.py` | Hacker News (Algolia API, no key needed) → `SocialPost` |
 | `collectors/advisory/cisa_kev.py` | CISA Known Exploited Vulnerabilities catalog (JSON feed, no key needed) → `Advisory` |
+| `collectors/advisory/github_advisories.py` | GitHub-reviewed security advisories (REST API, optional token, paginated) → `Advisory` |
 | `http_client.py` | `SourceHttpClient`: the only way collectors make HTTP requests |
 | `collection_core.py` | `run_collection()`: runs all collectors concurrently, one result per source |
 
@@ -139,14 +141,23 @@ Defined in `interfaces/collection_interfaces.py`. data_processing should depend 
 |---|---|
 | `WebArticle` (`source_type="web"`) | `site_name` |
 | `SocialPost` (`source_type="social"`) | `score`, `comment_count`, `discussion_url` |
-| `Advisory` (`source_type="advisory"`) | `cve_id`, `vendor`, `product`, `ecosystem`, `severity` (`low`/`medium`/`high`/`critical`), `known_exploited`, `known_ransomware_use`, `remediation_due_date` |
+| `Advisory` (`source_type="advisory"`) | `cve_id`, `affected` (list of `AffectedProduct`: `vendor`, `product`, `ecosystem`), `severity` (`low`/`medium`/`high`/`critical`), `known_exploited`, `known_ransomware_use`, `remediation_due_date` |
 
-`Advisory` is one record per vulnerability. `vendor`, `product` and `ecosystem` say who is affected, which is the main input for finding potential clients. Fields a source doesn't provide are null. For example, CISA KEV has no severity rating and no ecosystem.
+`Advisory` is one record per vulnerability, even when it affects several products, so a vulnerability is never counted twice when spotting trends. `affected` says who is affected, which is the main input for finding potential clients. Fields a source doesn't provide are null. For example, CISA KEV has no severity rating and no ecosystem. `known_exploited=False` means "not confirmed", not "safe".
 
 CISA KEV mapping notes:
 - `published_at` is the date CISA **added** the entry to the catalog, not the CVE's original publication date.
 - `url` links to the CVE's NVD page.
 - `tags` holds the CWE IDs.
+
+GitHub Advisories mapping notes:
+- Only GitHub-reviewed advisories are collected. Withdrawn advisories are dropped.
+- `external_id` is the GHSA ID. `cve_id` is null when GitHub hasn't linked a CVE.
+- `affected` has one entry per package (no vendor: open-source packages don't have one). Version ranges stay in `raw_payload`.
+- GitHub's `unknown` severity becomes null.
+- Reporter usernames (`credits`) are removed from `raw_payload`.
+- Results come in pages of 100 (about 4 days' worth). The collector follows the `Link` header up to `max_pages`, and logs a warning if it stops early. It only follows next-page links on the configured host, so the token can't be sent anywhere else.
+- Without `GITHUB_TOKEN`, GitHub allows 60 requests/hour. Going over returns 403, and the run fails as `non_retryable`. Set the token if that happens.
 
 **`CollectionResult`** has the same shape whether the run succeeded or failed:
 
@@ -198,6 +209,10 @@ advisory:
   cisa_kev:
     feed_url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
     lookback_days: 30                 # 1–3650; only entries added in the last N days
+  github_advisories:
+    api_url: https://api.github.com/advisories
+    lookback_days: 7                  # 1–365; only advisories published in the last N days
+    max_pages: 10                     # 1–30; pages of 100 advisories per run
 ```
 
 The file is validated on load. The following stop startup with a readable `SourcesConfigError`:
@@ -225,19 +240,20 @@ Run `pytest` from `backend/`. All tests are deterministic and make no network ca
 
 | Test file | Covers |
 |---|---|
-| `test_http_client.py` | Retry rules, timeouts, circuit breaker, robots.txt, invalid JSON |
+| `test_http_client.py` | Retry rules, timeouts, circuit breaker, robots.txt, invalid JSON, pagination links, per-request headers |
 | `test_collection_core.py` | Failure isolation, run time limits, shared correlation ID |
 | `test_sources.py` | Loading and validating config, enabled/disabled sources; also checks the shipped `sources.yaml` is valid |
 | `collectors/web/test_rss_feed.py` | Feed parsing, HTML sanitisation, stable IDs, truncation, invalid config |
 | `collectors/social/test_hacker_news.py` | Parsing hits, removing personal data, configured URLs and thresholds, invalid config |
 | `collectors/advisory/test_cisa_kev.py` | Parsing entries, lookback window, ransomware mapping, skipping bad records, CVE ID validation, invalid config |
+| `collectors/advisory/test_github_advisories.py` | Parsing, multi-package advisories, removing personal data, severity mapping, withdrawn advisories, pagination and page cap, refusing off-host links, token handling (sent only when set, never logged), invalid config |
 
 ---
 
 ## Next steps
 
 1. Postgres schema and storage for collected items, with de-duplication by `item_id`.
-2. More collectors: GitHub Security Advisories, OSV/NVD, Reddit, Mastodon.
+2. More collectors: OSV/NVD, Reddit, Mastodon.
 3. Scheduled collection runs.
 4. An endpoint that starts a run and returns a job ID, plus an endpoint to check its status.
 5. The data_processing module.

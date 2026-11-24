@@ -29,6 +29,11 @@ COLLECTOR_USER_AGENT = os.getenv("COLLECTOR_USER_AGENT", "TechTrendSpotterBot/0.
 # Per-request timeout (seconds) for data collectors talking to external sources
 COLLECTOR_TIMEOUT_SECONDS = float(os.getenv("COLLECTOR_TIMEOUT_SECONDS", "10"))
 
+# Optional GitHub token for the GitHub Security Advisories collector. Without it GitHub
+# allows 60 requests/hour; with it 5,000. A fine-grained token with NO permissions is
+# enough (advisories are public). Empty string = no token.
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
 # Path to the YAML file listing data collection sources. Defaults to the file
 # shipped next to the collectors; override to use a different set per environment.
 SOURCES_CONFIG_PATH = Path(os.getenv(

@@ -1,4 +1,5 @@
 import time
+from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlsplit
 from urllib.robotparser import RobotFileParser
@@ -46,6 +47,14 @@ class FetchError(Exception):
     def __init__(self, message: str, retryable: bool):
         super().__init__(message)
         self.retryable = retryable
+
+
+@dataclass(frozen=True)
+class JsonPage:
+    """One page of a paginated JSON API: the parsed body plus the URL of the next page (None on the last page)."""
+
+    body: Any
+    next_url: str | None
 
 
 class CircuitBreaker:
@@ -103,23 +112,33 @@ class SourceHttpClient:
     # ---------- Public API used by collectors ----------
 
     async def get_json(self, url: str, *, params: dict[str, Any] | None = None,
+                       headers: dict[str, str] | None = None,
                        check_robots: bool, correlation_id: str) -> Any:
         """GET a URL and return the parsed JSON body. Raises FetchError on failure."""
-        response = await self._get(url, params=params, check_robots=check_robots, correlation_id=correlation_id)
-        try:
-            return response.json()
-        except ValueError as error:
-            # The source answered but not with JSON - retrying won't fix that
-            raise FetchError(f"Response from {url} was not valid JSON: {error}", retryable=False) from error
+        response = await self._get(url, params=params, headers=headers,
+                                   check_robots=check_robots, correlation_id=correlation_id)
+        return _parse_json(response, url)
+
+    async def get_json_page(self, url: str, *, params: dict[str, Any] | None = None,
+                            headers: dict[str, str] | None = None,
+                            check_robots: bool, correlation_id: str) -> JsonPage:
+        """
+        GET one page of a paginated JSON API that uses the standard `Link: <...>; rel="next"` header
+        (e.g. GitHub). The next URL is returned as-is; the caller must check it before following it.
+        """
+        response = await self._get(url, params=params, headers=headers,
+                                   check_robots=check_robots, correlation_id=correlation_id)
+        next_link = response.links.get("next", {}).get("url")
+        return JsonPage(body=_parse_json(response, url), next_url=next_link)
 
     async def get_bytes(self, url: str, *, check_robots: bool, correlation_id: str) -> bytes:
         """GET a URL and return the raw body (e.g. an RSS/Atom feed). Raises FetchError on failure."""
-        response = await self._get(url, params=None, check_robots=check_robots, correlation_id=correlation_id)
+        response = await self._get(url, params=None, headers=None, check_robots=check_robots, correlation_id=correlation_id)
         return response.content
 
     # ---------- Internals ----------
 
-    async def _get(self, url: str, *, params: dict[str, Any] | None,
+    async def _get(self, url: str, *, params: dict[str, Any] | None, headers: dict[str, str] | None,
                    check_robots: bool, correlation_id: str) -> httpx.Response:
         """Runs the guarded request: circuit breaker -> robots.txt -> request with retries."""
         host = urlsplit(url).netloc
@@ -132,7 +151,7 @@ class SourceHttpClient:
             raise FetchError(f"robots.txt for {host} disallows fetching {url}", retryable=False)
 
         try:
-            response = await self._send_with_retries(url, params, correlation_id)
+            response = await self._send_with_retries(url, params, headers, correlation_id)
         except FetchError as error:
             # Only count failures the source is responsible for (not e.g. 404s or size rejections)
             if error.retryable:
@@ -147,7 +166,7 @@ class SourceHttpClient:
         return response
 
     async def _send_with_retries(self, url: str, params: dict[str, Any] | None,
-                                 correlation_id: str) -> httpx.Response:
+                                 headers: dict[str, str] | None, correlation_id: str) -> httpx.Response:
         """Calls _send_once, retrying retryable failures with exponential backoff up to max_attempts."""
         retrying = AsyncRetrying(
             stop=stop_after_attempt(self._max_attempts),
@@ -162,14 +181,18 @@ class SourceHttpClient:
                         "correlation_id": correlation_id,
                         "context": {"url": url, "attempt": attempt.retry_state.attempt_number},
                     })
-                return await self._send_once(url, params, correlation_id)
+                return await self._send_once(url, params, headers, correlation_id)
         raise FetchError(f"Retry loop for {url} ended without a result", retryable=False)  # unreachable safeguard
 
-    async def _send_once(self, url: str, params: dict[str, Any] | None, correlation_id: str) -> httpx.Response:
-        """One HTTP attempt. Converts every failure into a FetchError with the right retryable flag."""
+    async def _send_once(self, url: str, params: dict[str, Any] | None,
+                         headers: dict[str, str] | None, correlation_id: str) -> httpx.Response:
+        """
+        One HTTP attempt. Converts every failure into a FetchError with the right retryable flag.
+        `headers` may carry an auth token, so they are never logged.
+        """
         started = time.perf_counter()
         try:
-            response = await self._client.get(url, params=params)
+            response = await self._client.get(url, params=params, headers=headers)
         except httpx.TimeoutException as error:
             raise FetchError(f"Timed out requesting {url}", retryable=True) from error
         except httpx.TransportError as error:
@@ -220,3 +243,11 @@ class SourceHttpClient:
             self._robots_cache[host] = parser
 
         return self._robots_cache[host].can_fetch(COLLECTOR_USER_AGENT, url)
+
+
+def _parse_json(response: httpx.Response, url: str) -> Any:
+    """Parses a JSON body. A non-JSON answer is non-retryable - asking again won't fix it."""
+    try:
+        return response.json()
+    except ValueError as error:
+        raise FetchError(f"Response from {url} was not valid JSON: {error}", retryable=False) from error

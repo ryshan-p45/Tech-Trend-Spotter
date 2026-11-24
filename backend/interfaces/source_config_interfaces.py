@@ -84,10 +84,22 @@ class CisaKevConfig(StrictConfigModel):
     _check_url = field_validator("feed_url")(_require_https)
 
 
+class GitHubAdvisoriesConfig(StrictConfigModel):
+    """Settings for the GitHub Security Advisories collector (global advisory database, reviewed advisories)."""
+
+    enabled: bool = Field(default=True, description="Set to false to disable this collector")
+    api_url: HttpUrl = Field(description="GitHub global advisories endpoint (https only)")
+    lookback_days: int = Field(default=7, ge=1, le=365, description="Only collect advisories published in the last N days (1-365)")
+    max_pages: int = Field(default=10, ge=1, le=30, description="Maximum pages of 100 advisories per run (1-30), a safety cap on API usage")
+
+    _check_url = field_validator("api_url")(_require_https)
+
+
 class AdvisorySourcesConfig(StrictConfigModel):
     """All structured vulnerability/advisory sources. Each is optional - omit it to disable."""
 
     cisa_kev: CisaKevConfig | None = Field(default=None, description="CISA KEV catalog settings")
+    github_advisories: GitHubAdvisoriesConfig | None = Field(default=None, description="GitHub Security Advisories settings")
 
 
 class SourcesConfig(StrictConfigModel):

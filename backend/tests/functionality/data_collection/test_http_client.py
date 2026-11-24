@@ -98,3 +98,31 @@ def test_circuit_breaker_opens_after_threshold_and_resets_after_cooldown():
     assert breaker.allows_request()
     breaker.record_success()
     assert breaker.allows_request()
+
+
+def test_get_json_page_returns_body_and_next_link():
+    def handler(request):
+        return httpx.Response(200, json=[{"id": 1}],
+                              headers={"Link": '<https://api.test/x?after=abc>; rel="next"'})
+
+    page = asyncio.run(make_client(handler).get_json_page("https://api.test/x", check_robots=False, correlation_id="t"))
+    assert page.body == [{"id": 1}]
+    assert page.next_url == "https://api.test/x?after=abc"
+
+
+def test_get_json_page_on_last_page_has_no_next_link():
+    page = asyncio.run(make_client(lambda request: httpx.Response(200, json=[])).get_json_page(
+        "https://api.test/x", check_robots=False, correlation_id="t"))
+    assert page.next_url is None
+
+
+def test_sends_per_request_headers():
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers)
+        return httpx.Response(200, json={})
+
+    asyncio.run(make_client(handler).get_json("https://api.test/x", headers={"Accept": "application/test"},
+                                              check_robots=False, correlation_id="t"))
+    assert seen[0]["Accept"] == "application/test"

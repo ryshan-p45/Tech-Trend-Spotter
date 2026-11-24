@@ -34,3 +34,11 @@ advisory:
     # Free, key-less CISA Known Exploited Vulnerabilities catalog: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
     feed_url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
     lookback_days: 30
+
+  github_advisories:
+    # Free GitHub global advisory database (reviewed advisories only):
+    # https://docs.github.com/en/rest/security-advisories/global-advisories
+    # Optional GITHUB_TOKEN env variable raises the rate limit from 60 to 5,000 requests/hour.
+    api_url: https://api.github.com/advisories
+    lookback_days: 7   # ~25 advisories/day, so 7 days is about 2 pages
+    max_pages: 10      # safety cap on requests per run
