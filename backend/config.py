@@ -40,3 +40,7 @@ SOURCES_CONFIG_PATH = Path(os.getenv(
     "SOURCES_CONFIG_PATH",
     str(Path(__file__).parent / "functionality" / "data_collection" / "sources.yaml"),
 ))
+
+# Minimum seconds between collection runs started through the API. Protects external
+# sources (and GitHub's rate limit) from being hit repeatedly by the "Run collection" button.
+COLLECTION_RUN_COOLDOWN_SECONDS = int(os.getenv("COLLECTION_RUN_COOLDOWN_SECONDS", "300"))

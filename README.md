@@ -12,13 +12,12 @@ collect → store → enrich → detect trends/categorise → match opportunitie
 
 | Area | Status |
 |---|---|
-| [Backend API](#backend-api) | Done (skeleton and health check) |
-| [Frontend](#frontend) | Done (setup, theme, placeholder dashboard) |
-| [Local database](#local-database) | Postgres container ready; schema not started |
+| [Backend API](#backend-api) | Done: health, items, dashboard stats, collection runs |
 | [Data collection](#data-collection) | Done: RSS feeds, Hacker News, CISA KEV, GitHub Security Advisories |
-| Storage of collected items | Not started |
+| [Storage](#storage) | Done: collected items and collection runs in Postgres |
+| [Dashboard](#dashboard) | Done: HUD dashboard of collected data, with on-demand collection runs |
 | Enrichment, trend detection, opportunity matching | Not started |
-| Real dashboard, alerts, Railway deployment | Not started |
+| Scheduled runs, authentication, alerts, Railway deployment | Not started |
 
 The full plan, open questions and to-do list are in [plans/Ideas.md](plans/Ideas.md).
 
@@ -45,7 +44,8 @@ cd backend
 python3 -m venv code_env
 source code_env/bin/activate
 pip install -r requirements-dev.txt
-uvicorn main:app --reload          # http://localhost:8000
+python -m database.migrate         # create the tables (re-run after pulling new migrations)
+uvicorn main:app --reload          # http://localhost:8000 (API docs at /docs)
 
 # 3. Frontend (from frontend/, in a second terminal)
 cd frontend
@@ -54,11 +54,11 @@ npm install
 npm run dev                        # http://localhost:5173
 ```
 
-When the dashboard shows **API online**, the frontend and backend are connected.
+When the dashboard shows **API online**, the frontend and backend are connected. Press **Run collection** to fetch the first data.
 
 | Task | Command |
 |---|---|
-| Backend tests | `pytest` (from `backend/`) |
+| Backend tests | `pytest` (from `backend/`). Set `TEST_DATABASE_URL` to also run the database tests |
 | Frontend tests | `npm test` (from `frontend/`) |
 | Frontend lint | `npm run lint` (from `frontend/`) |
 | Run every collector once and print a summary | `python -m functionality.data_collection.collection_core` (from `backend/`) |
@@ -78,29 +78,46 @@ When the dashboard shows **API online**, the frontend and backend are connected.
 
 ## Backend API
 
-A FastAPI service that everything else is built on.
+A FastAPI service that everything else is built on. Every route is versioned under `/v1`, and interactive docs are at `/docs`.
 
-- Every route is versioned under `/v1`.
-- `GET /v1/health` returns `{"status": "ok"}`. Railway and the frontend use it to check the API is up.
+| Endpoint | Purpose |
+|---|---|
+| `GET /v1/health` | Checks the API is up (used by Railway and the dashboard) |
+| `GET /v1/items` | Collected items, newest first, filterable by source type or source, with cursor pagination |
+| `GET /v1/item-stats` | Dashboard figures: totals, items per day, advisory severity, exploited count, most affected vendors and ecosystems |
+| `POST /v1/collection-runs` | Starts a collection run in the background and returns it at once (`202`) |
+| `GET /v1/collection-runs/latest`, `GET /v1/collection-runs/{run_id}` | Follow a run until it completes |
+
+- Every response uses one envelope: `{"data": ...}`, with `pagination` added for lists, or `{"error": {"code", "message"}}`. Error messages say what went wrong and what to do next.
+- Only one collection run can be active at a time, and there's a cool-down between runs (default 5 minutes), so the button can't hammer external sources.
+- **There is no authentication yet.** Add it before deploying anywhere public.
 - CORS only allows the frontend origins listed in `FRONTEND_ORIGINS`.
 - All settings come from environment variables, read in one place: `backend/config.py`. Nothing secret is hardcoded. `backend/.env.example` lists every variable.
-- Logs are structured JSON lines with a UTC timestamp, level, service name and correlation ID.
+- Logs are structured JSON lines with a UTC timestamp, level, service name and correlation ID. A collection run's ID is its correlation ID.
 
-## Frontend
+## Storage
 
-A React + TypeScript app built with Vite. So far it has the base the real dashboard will sit on, not the dashboard itself.
+Collected items and collection runs are stored in PostgreSQL. `docker-compose.yml` runs a PostgreSQL 17 container for local development, and the backend connects through `DATABASE_URL`.
 
-- **Routing** (React Router) with a single page for now: the dashboard at `/`.
-- **API client** (`src/api/client.ts`): a small wrapper around `fetch` that calls the `/v1` API. Set the backend URL with `VITE_API_BASE_URL`, so local and deployed builds can use different backends.
-- **Server data** is fetched and cached with TanStack Query.
-- **Cyber/HUD theme**: dark navy with cyan, teal and magenta accents and a monospace font. The colours are defined once as Tailwind tokens in `src/index.css`, e.g. `bg-hud-bg` and `text-hud-cyan`. The look is based on [plans/graphic_inspiration](plans/graphic_inspiration).
-- **Placeholder dashboard**: shows whether the backend can be reached, with loading and error messages.
-- Charting (ECharts) and network-graph (react-force-graph) libraries are installed for the upcoming trend views.
-- Tests run with Vitest and Testing Library.
+- Tables are created by versioned migrations (`python -m database.migrate`). This is a separate step; the API never runs migrations.
+- Items are de-duplicated by their stable ID. Collecting an item again refreshes it but keeps when it was first seen, so each run knows how many items were new.
+- Each run records its status, timings and the outcome of every source.
+- If the database is down, the API still starts. Data endpoints return a clear 503, and the health check keeps working.
 
-## Local database
+## Dashboard
 
-`docker-compose.yml` runs a PostgreSQL 17 container for local development. It reads its user, password and database name from `backend/.env`, and keeps data in a Docker volume between restarts. The backend connects through `DATABASE_URL`. The database schema and writes are the next stage of the pipeline.
+A React + TypeScript app (Vite, Tailwind CSS, TanStack Query, ECharts), styled as a cyber/HUD interface after [plans/graphic_inspiration](plans/graphic_inspiration): dark navy panels with glowing corner brackets, striped headings, and cyan and magenta accents.
+
+- **Run collection** starts a run, shows its progress live, and refreshes the dashboard when it finishes.
+- **Headline figures:** items collected, advisories, vulnerabilities exploited in the wild, and critical or high advisories.
+- **Activity chart:** items per day by source type, with a table view.
+- **Exposure:** share of advisories exploited in the wild, and advisories by severity.
+- **Most affected vendors and package ecosystems.**
+- **Latest signals:** a feed of every item with tabs for advisories, news and discussions. Advisories show their CVE, severity, exploitation flags and affected products.
+- **Exploited in the wild:** the newest CISA KEV entries with their fix deadlines.
+- **Sources:** whether each source worked in the last run, and why one failed.
+
+Every panel has loading, empty and error states written in plain language. Chart colours were checked for colour-blind safety and contrast. Severity is never shown by colour alone, and only `http(s)` links from collected data are rendered. See [frontend/FRONTEND.md](frontend/FRONTEND.md) for details.
 
 ## Data collection
 
@@ -145,12 +162,12 @@ See [backend/BACKEND.md](backend/BACKEND.md) for the full schema, configuration 
 
 ## Next up
 
-1. An OSV/NVD collector, to finish the advisory sources.
-2. A Postgres schema, and writing collected items to it.
-3. Running collection on a schedule.
+1. Authentication, before any public deployment.
+2. Running collection on a schedule.
+3. An OSV/NVD collector, to finish the advisory sources.
 4. Enrichment: pulling companies, products, technologies and CVEs out of each item.
 5. Trend detection and opportunity matching.
-6. The real dashboard, with a network graph of linked trends.
+6. A network graph of linked trends on the dashboard (needs enrichment first).
 
 ## Development guidelines
 

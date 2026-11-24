@@ -6,8 +6,9 @@ FastAPI service that collects, processes and serves software/technology trend da
 |---|---|
 | API skeleton (`/v1/health`) | Done |
 | Data collection (web, social and advisory sources) | Initial version done |
-| Storage (Postgres) | Container set up; schema and writes not started |
-| Data processing, scheduling, collection endpoints | Not started |
+| Storage (Postgres): collected items and collection runs | Initial version done |
+| API: start/follow collection runs, list items, dashboard stats | Initial version done |
+| Data processing, scheduled runs, authentication | Not started |
 
 ---
 
@@ -29,25 +30,32 @@ cp .env.example .env
 # 4. Start Postgres (from the repository root)
 docker compose up -d
 
-# 5. Run the API
+# 5. Create/update the database tables (run again whenever a new migration is added)
+python -m database.migrate
+
+# 6. Run the API (docs at http://localhost:8000/docs)
 uvicorn main:app --reload
 ```
 
 | Task | Command |
 |---|---|
 | Run tests | `pytest` |
+| Run tests including the database tests | `TEST_DATABASE_URL=postgresql://... pytest` (see [Tests](#tests)) |
+| Apply database migrations | `python -m database.migrate` |
 | Run every collector once and print a summary | `python -m functionality.data_collection.collection_core` |
 
 ### Environment variables
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `DATABASE_URL` | Yes (once storage exists) | — | Postgres connection string |
+| `DATABASE_URL` | Yes | — | Postgres connection string. Without it the data endpoints return 503; `/v1/health` still works |
 | `FRONTEND_ORIGINS` | No | `http://localhost:5173` | Comma-separated origins allowed by CORS |
 | `COLLECTOR_USER_AGENT` | No | `TechTrendSpotterBot/0.1` | User-Agent sent to sources. Keep it generic: no names or emails |
 | `COLLECTOR_TIMEOUT_SECONDS` | No | `10` | Per-request timeout for external sources |
 | `SOURCES_CONFIG_PATH` | No | `functionality/data_collection/sources.yaml` | Which sources file to load (e.g. a different file per environment) |
 | `GITHUB_TOKEN` | No | — | Raises the GitHub Advisories rate limit from 60 to 5,000 requests/hour. Use a fine-grained token with **no** permissions (the data is public). Never logged |
+| `COLLECTION_RUN_COOLDOWN_SECONDS` | No | `300` | Minimum time between collection runs started through the API |
+| `TEST_DATABASE_URL` | No | — | Only for tests: enables the database integration tests (they use a throwaway schema) |
 
 ---
 
@@ -55,18 +63,24 @@ uvicorn main:app --reload
 
 ```
 backend/
-├── main.py                     # FastAPI app, CORS, router registration (everything under /v1)
+├── main.py                     # FastAPI app, CORS, error handlers, router registration (everything under /v1)
 ├── config.py                   # Every environment variable is read here
 ├── app_logging.py              # Structured JSON logger
-├── endpoints/                  # API routers
+├── endpoints/                  # API routers, dependencies and the error envelope (errors.py)
 ├── interfaces/                 # Pydantic contracts shared between modules
+│   ├── api_interfaces.py            # Public API contract: envelopes, items, stats, runs
 │   ├── collection_interfaces.py     # Collected data schema (WebArticle, SocialPost, Advisory, CollectionResult)
 │   ├── source_config_interfaces.py  # Schema for sources.yaml
-│   └── query_interfaces.py          # API response models
+│   └── query_interfaces.py          # Health response
 ├── functionality/
-│   └── data_collection/        # See "Data collection" below
-├── database/                   # DB schema (db_schema.dbml)
-└── tests/                      # Mirrors the source tree
+│   ├── data_collection/        # See "Data collection" below
+│   ├── storage/                # SQL for collected_items and collection_runs (repositories)
+│   └── collection_runs/        # Starts runs and records their outcome
+├── database/
+│   ├── connection.py           # Connection pool (lazy, statement timeout, 503 when unreachable)
+│   ├── migrate.py              # Migration runner: python -m database.migrate
+│   └── migrations/             # Numbered .sql files, applied in order, each once
+└── tests/                      # Mirrors the source tree; fakes.py holds in-memory stand-ins
 ```
 
 Imports are written relative to `backend/` (e.g. `from config import ...`). `pytest.ini` sets `pythonpath = .` so tests resolve them the same way.
@@ -236,7 +250,13 @@ The file is validated on load. The following stop startup with a readable `Sourc
 
 ### Tests
 
-Run `pytest` from `backend/`. All tests are deterministic and make no network calls; HTTP is mocked with `httpx.MockTransport`.
+Run `pytest` from `backend/`. All tests are deterministic and make no network calls; HTTP is mocked with `httpx.MockTransport`. API and service tests use the in-memory fakes in `tests/fakes.py`.
+
+The database tests (`tests/database/`) are skipped unless `TEST_DATABASE_URL` is set. Each run creates its own throwaway schema, migrates it and drops it afterwards, so it's safe to point at your development database:
+
+```bash
+TEST_DATABASE_URL=postgresql://techtrendspotter:techtrendspotter@localhost:5432/techtrendspotter pytest
+```
 
 | Test file | Covers |
 |---|---|
@@ -247,13 +267,66 @@ Run `pytest` from `backend/`. All tests are deterministic and make no network ca
 | `collectors/social/test_hacker_news.py` | Parsing hits, removing personal data, configured URLs and thresholds, invalid config |
 | `collectors/advisory/test_cisa_kev.py` | Parsing entries, lookback window, ransomware mapping, skipping bad records, CVE ID validation, invalid config |
 | `collectors/advisory/test_github_advisories.py` | Parsing, multi-package advisories, removing personal data, severity mapping, withdrawn advisories, pagination and page cap, refusing off-host links, token handling (sent only when set, never logged), invalid config |
+| `storage/test_items_repository.py` | Plain-text summaries, cursor encoding and tamper rejection, filling empty days, what goes into `details` |
+| `collection_runs/test_run_service.py` | One active run, cool-down, per-source results, new-item counts, failures recorded without leaking details |
+| `endpoints/test_api.py` | Envelopes, status codes (400/404/409/429/503/500), validation, background run flow |
+| `database/test_repositories_db.py` | Real SQL: migration, upsert and de-duplication, pagination, stats, run lifecycle (needs `TEST_DATABASE_URL`) |
+
+---
+
+## Storage
+
+Postgres tables, created by `database/migrations/001_collected_items_and_runs.sql`:
+
+| Table | Holds |
+|---|---|
+| `collected_items` | Every item ever collected, one row per `item_id`. Common fields are columns; type-specific fields (score, severity, `affected`...) are in the `details` JSONB column, so a new item type doesn't need a migration. `raw_payload` keeps the original record. `first_collected_at` / `last_collected_at` track when it was seen |
+| `collection_runs` | One row per run: status, timings, item counts and the outcome of each source |
+| `schema_migrations` | Which migration files have been applied |
+
+Rules:
+- **Migrations are a separate step** (`python -m database.migrate`), never run by the API. Never edit an applied migration; add a new numbered file.
+- **Re-collecting an item updates it** (content, tags, `last_collected_at`) but keeps `first_collected_at`. A run reports how many items were new.
+- **Only one run can be active at a time.** A unique partial index enforces this in the database, so two simultaneous requests can't both start a run.
+- **Runs interrupted by a restart** are marked failed when the API starts, so they never block new runs.
+- **Every query is parameterised and has a `LIMIT`**. Every connection has a 10s statement timeout.
+- **If Postgres is down**, the API still starts. Data endpoints return 503 with a readable message, and `/v1/health` keeps answering.
+
+---
+
+## API
+
+Every route is under `/v1`. Interactive docs: http://localhost:8000/docs. The contract is in `interfaces/api_interfaces.py`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /health` | API is up (doesn't touch the database) |
+| `GET /items` | Collected items, newest first. Filters: `source_type`, `source_name`. Cursor pagination: `limit` (1–100, default 25) and `cursor` |
+| `GET /item-stats` | Dashboard figures: totals per source, items per day, advisory severity, exploited count, most affected vendors and ecosystems. `days` (1–90, default 14) |
+| `POST /collection-runs` | Starts a run in the background and returns it straight away (`202`). `409` if one is already running, `429` + `Retry-After` during the cool-down |
+| `GET /collection-runs/latest` | The most recent run (`404 no_runs` if there has never been one) |
+| `GET /collection-runs/{run_id}` | One run, for polling until it's `completed` or `failed` |
+
+**Response envelopes**, used by every endpoint:
+
+```jsonc
+{"data": {...}}                                                     // one resource
+{"data": [...], "pagination": {"next_cursor": "...", "limit": 25}}  // a list
+{"error": {"code": "invalid_cursor", "message": "..."}}             // any error
+```
+
+- Every item has the same shape. Fields that don't apply to its type are `null` (e.g. `score` on an advisory).
+- Items return a plain-text `summary` (HTML removed, max 300 characters), not the full content or the raw payload.
+- Error messages are written for the person using the dashboard: what went wrong and what to do. Internal details only go to the logs.
+- A run that completes can still have failed sources. Check `sources[].status`. A `failed` run means the run as a whole couldn't finish.
+
+**Authentication: none yet.** Every endpoint is public. `POST /collection-runs` is limited to one run at a time with a cool-down, so it can't be used to hammer the sources. Add authentication before deploying anywhere public.
 
 ---
 
 ## Next steps
 
-1. Postgres schema and storage for collected items, with de-duplication by `item_id`.
-2. More collectors: OSV/NVD, Reddit, Mastodon.
-3. Scheduled collection runs.
-4. An endpoint that starts a run and returns a job ID, plus an endpoint to check its status.
-5. The data_processing module.
+1. Authentication before any public deployment.
+2. Scheduled collection runs (e.g. hourly), reusing `CollectionRunService`.
+3. More collectors: OSV/NVD, Reddit, Mastodon.
+4. The data_processing module (enrichment, trend detection).

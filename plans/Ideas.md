@@ -57,11 +57,11 @@ collect → store → enrich → detect trends/categorise → match opportunitie
 | Stage | What it does | Status |
 |---|---|---|
 | Collect | Pull raw items from configured sources into the standard schema | Initial version done (RSS, Hacker News, CISA KEV, GitHub Advisories) |
-| Store | Persist items in Postgres, de-duplicated by `item_id`, so trends can be tracked over time | Not started |
+| Store | Persist items in Postgres, de-duplicated by `item_id`, so trends can be tracked over time | Initial version done (items + collection runs) |
 | Enrich | Extract entities from each item: companies/vendors, products, technologies, CVE IDs | Not started |
 | Detect & categorise | Spot growing topics (volume/engagement over time) and map them to sub-categories | Not started |
 | Match opportunities | Compare trends against a services catalogue and produce Opportunity records | Not started |
-| Present | Dashboard drill-down, and possibly email alerts for high-priority opportunities | Not started |
+| Present | Dashboard drill-down, and possibly email alerts for high-priority opportunities | Initial dashboard of collected data done; trend/opportunity views not started |
 
 ### Opportunity types and what they need
 
