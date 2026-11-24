@@ -28,3 +28,9 @@ social:
     item_url_template: https://news.ycombinator.com/item?id={item_id}
     min_points: 50
     max_items: 50
+
+advisory:
+  cisa_kev:
+    # Free, key-less CISA Known Exploited Vulnerabilities catalog: https://www.cisa.gov/known-exploited-vulnerabilities-catalog
+    feed_url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    lookback_days: 30
