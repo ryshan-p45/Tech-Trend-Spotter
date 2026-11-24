@@ -1,5 +1,5 @@
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -10,15 +10,22 @@ Every collector MUST output one of the item models below. data_processing
 only depends on these models - never on a specific collector - so collectors
 can be added, changed or removed without touching processing code.
 
-Web and social data are kept as separate models (and separate result
-batches) so they can be handled differently downstream:
-    - WebArticle  -> blogs, news sites, advisories, RSS feeds
+Web, social and advisory data are kept as separate models (and separate
+result batches) so they can be handled differently downstream:
+    - WebArticle  -> blogs, news sites, RSS feeds (including vendor security blogs)
     - SocialPost  -> community platforms (Hacker News, Reddit, Mastodon...)
+    - Advisory    -> structured vulnerability records (CISA KEV, GitHub Advisories, OSV/NVD)
 """
 
 
 # Source categories. Adding a new category is a deliberate contract change.
-SourceType = Literal["web", "social"]
+SourceType = Literal["web", "social", "advisory"]
+
+# Normalised severity levels. Each advisory source maps its own scale onto these
+Severity = Literal["low", "medium", "high", "critical"]
+
+# CVE IDs: "CVE-" + 4-digit year + 4 or more digits (e.g. CVE-2026-133968)
+CVE_ID_PATTERN = r"^CVE-\d{4}-\d{4,}$"
 
 # Outcome of a single collector run
 CollectionStatus = Literal["success", "failed"]
@@ -42,7 +49,7 @@ class CollectedItem(BaseModel):
     """Fields every collected item has, regardless of where it came from."""
 
     item_id: str = Field(description="Deterministic SHA-256 of source_name + external_id, used for de-duplication")
-    source_type: SourceType = Field(description="Category of the source: 'web' or 'social'")
+    source_type: SourceType = Field(description="Category of the source: 'web', 'social' or 'advisory'")
     source_name: str = Field(min_length=1, max_length=100, description="Identifier of the specific source, e.g. 'hacker_news' or 'rss:krebsonsecurity'")
     external_id: str = Field(min_length=1, max_length=500, description="The item's ID at the source (post ID, feed entry GUID, or URL)")
     title: str = Field(min_length=1, max_length=500, description="Headline / post title")
@@ -78,6 +85,24 @@ class SocialPost(CollectedItem):
     discussion_url: HttpUrl | None = Field(description="Link to the discussion thread on the platform. Null if unavailable")
 
 
+class Advisory(CollectedItem):
+    """
+    A structured vulnerability record. vendor/product/ecosystem identify who is
+    affected, which is the main input for finding potential clients.
+    One advisory = one CVE (or one source ID when no CVE exists yet).
+    """
+
+    source_type: Literal["advisory"] = "advisory"
+    cve_id: str | None = Field(pattern=CVE_ID_PATTERN, description="CVE identifier, e.g. 'CVE-2026-1234'. Null when the advisory has no CVE yet")
+    vendor: str | None = Field(max_length=200, description="Company or project responsible for the affected product. Null if unknown")
+    product: str | None = Field(max_length=200, description="Affected product or package name. Null if unknown")
+    ecosystem: str | None = Field(max_length=50, description="Package ecosystem for open-source advisories, e.g. 'npm' or 'PyPI'. Null when not applicable")
+    severity: Severity | None = Field(description="Normalised severity. Null when the source does not rate severity (e.g. CISA KEV)")
+    known_exploited: bool = Field(description="True when the vulnerability is confirmed to be exploited in the wild")
+    known_ransomware_use: bool | None = Field(description="True if used in ransomware campaigns, False if not known to be. Null if the source does not say")
+    remediation_due_date: date | None = Field(description="Deadline the source sets for applying a fix (CISA KEV 'dueDate'). Null if none")
+
+
 class CollectionError(BaseModel):
     """Structured description of why a collector run failed."""
 
@@ -93,9 +118,9 @@ class CollectionResult(BaseModel):
 
     correlation_id: str = Field(description="ID shared by all collectors in the same run, for tracing")
     source_name: str = Field(description="Which collector produced this result")
-    source_type: SourceType = Field(description="Category of items in this batch - batches never mix web and social")
+    source_type: SourceType = Field(description="Category of items in this batch - batches never mix source types")
     status: CollectionStatus = Field(description="'success' or 'failed'")
-    items: list[WebArticle] | list[SocialPost] = Field(description="Collected items. Empty on failure")
+    items: list[WebArticle] | list[SocialPost] | list[Advisory] = Field(description="Collected items. Empty on failure")
     skipped_count: int = Field(ge=0, description="Records dropped because they failed validation")
     error: CollectionError | None = Field(description="Failure details. Null on success")
     started_at: datetime = Field(description="Run start time (UTC)")

@@ -23,6 +23,7 @@ How the pieces fit (data flow):
     sources.py           -> loads/validates sources.yaml and builds the collectors
     collectors/web/      -> web sources    -> WebArticle items
     collectors/social/   -> social sources -> SocialPost items
+    collectors/advisory/ -> vulnerability sources -> Advisory items
     http_client.py       -> shared polite HTTP (timeouts, retries, circuit breaker, robots.txt)
     interfaces/collection_interfaces.py -> the standard schema data_processing consumes
     collection_core.py   -> runs all collectors concurrently and returns one CollectionResult per source
@@ -96,7 +97,7 @@ async def _manual_run() -> None:
     collectors = build_collectors(load_sources_config(SOURCES_CONFIG_PATH))
     results = await run_collection(collectors)
     for result in results:
-        print(f"{result.source_type:7} {result.source_name:24} {result.status:8} "
+        print(f"{result.source_type:8} {result.source_name:24} {result.status:8} "
               f"items={len(result.items):<4} skipped={result.skipped_count}"
               + (f"  error={result.error.message}" if result.error else ""))
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
+from functionality.data_collection.collectors.advisory.cisa_kev import CisaKevCollector
 from functionality.data_collection.collectors.base import BaseCollector
 from functionality.data_collection.collectors.social.hacker_news import HackerNewsCollector
 from functionality.data_collection.collectors.web.rss_feed import RssFeedCollector
@@ -13,7 +14,7 @@ Loads the sources file (sources.yaml) and builds one collector per enabled sourc
 
 To add a source:
     - Same type as an existing one (e.g. another RSS feed): just edit sources.yaml
-    - New kind of source: write a collector in collectors/web/ or collectors/social/,
+    - New kind of source: write a collector in collectors/web/, collectors/social/ or collectors/advisory/,
       add its settings model to interfaces/source_config_interfaces.py, and wire it
       up in build_collectors() below
 """
@@ -49,4 +50,9 @@ def build_collectors(config: SourcesConfig) -> list[BaseCollector]:
     if hacker_news is not None and hacker_news.enabled:
         social_collectors.append(HackerNewsCollector(hacker_news))
 
-    return web_collectors + social_collectors
+    advisory_collectors: list[BaseCollector] = []
+    cisa_kev = config.advisory.cisa_kev
+    if cisa_kev is not None and cisa_kev.enabled:
+        advisory_collectors.append(CisaKevCollector(cisa_kev))
+
+    return web_collectors + social_collectors + advisory_collectors

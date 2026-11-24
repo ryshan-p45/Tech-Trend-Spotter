@@ -5,7 +5,7 @@ FastAPI service that collects, processes and serves software/technology trend da
 | Area | Status |
 |---|---|
 | API skeleton (`/v1/health`) | Done |
-| Data collection (web + social sources) | Initial version done |
+| Data collection (web, social and advisory sources) | Initial version done |
 | Storage (Postgres) | Container set up; schema and writes not started |
 | Data processing, scheduling, collection endpoints | Not started |
 
@@ -59,7 +59,7 @@ backend/
 ├── app_logging.py              # Structured JSON logger
 ├── endpoints/                  # API routers
 ├── interfaces/                 # Pydantic contracts shared between modules
-│   ├── collection_interfaces.py     # Collected data schema (WebArticle, SocialPost, CollectionResult)
+│   ├── collection_interfaces.py     # Collected data schema (WebArticle, SocialPost, Advisory, CollectionResult)
 │   ├── source_config_interfaces.py  # Schema for sources.yaml
 │   └── query_interfaces.py          # API response models
 ├── functionality/
@@ -97,7 +97,7 @@ sources.yaml ──► sources.py ──► collectors ──► SourceHttpClien
                                    │
                                    ▼
                      CollectionResult per source
-                 (WebArticle[] or SocialPost[], never mixed)
+           (WebArticle[], SocialPost[] or Advisory[], never mixed)
                                    │
                                    ▼
                      data_processing / storage (next)
@@ -110,6 +110,7 @@ sources.yaml ──► sources.py ──► collectors ──► SourceHttpClien
 | `collectors/base.py` | `BaseCollector`: run time limit, error isolation, skips records that don't fit the schema |
 | `collectors/web/rss_feed.py` | RSS/Atom feeds → `WebArticle` |
 | `collectors/social/hacker_news.py` | Hacker News (Algolia API, no key needed) → `SocialPost` |
+| `collectors/advisory/cisa_kev.py` | CISA Known Exploited Vulnerabilities catalog (JSON feed, no key needed) → `Advisory` |
 | `http_client.py` | `SourceHttpClient`: the only way collectors make HTTP requests |
 | `collection_core.py` | `run_collection()`: runs all collectors concurrently, one result per source |
 
@@ -122,8 +123,8 @@ Defined in `interfaces/collection_interfaces.py`. data_processing should depend 
 | Field | Notes |
 |---|---|
 | `item_id` | SHA-256 of `source_name:external_id`. The same item gets the same ID on every run, so duplicates can be removed |
-| `source_type` | `"web"` or `"social"` |
-| `source_name` | e.g. `rss:krebsonsecurity`, `hacker_news` |
+| `source_type` | `"web"`, `"social"` or `"advisory"` |
+| `source_name` | e.g. `rss:krebsonsecurity`, `hacker_news`, `cisa_kev` |
 | `external_id` | The item's ID at the source |
 | `title` | Required, at most 500 characters |
 | `url` | Nullable (e.g. Ask HN posts have no link) |
@@ -138,6 +139,14 @@ Defined in `interfaces/collection_interfaces.py`. data_processing should depend 
 |---|---|
 | `WebArticle` (`source_type="web"`) | `site_name` |
 | `SocialPost` (`source_type="social"`) | `score`, `comment_count`, `discussion_url` |
+| `Advisory` (`source_type="advisory"`) | `cve_id`, `vendor`, `product`, `ecosystem`, `severity` (`low`/`medium`/`high`/`critical`), `known_exploited`, `known_ransomware_use`, `remediation_due_date` |
+
+`Advisory` is one record per vulnerability. `vendor`, `product` and `ecosystem` say who is affected, which is the main input for finding potential clients. Fields a source doesn't provide are null. For example, CISA KEV has no severity rating and no ecosystem.
+
+CISA KEV mapping notes:
+- `published_at` is the date CISA **added** the entry to the catalog, not the CVE's original publication date.
+- `url` links to the CVE's NVD page.
+- `tags` holds the CWE IDs.
 
 **`CollectionResult`** has the same shape whether the run succeeded or failed:
 
@@ -184,6 +193,11 @@ social:
     item_url_template: https://news.ycombinator.com/item?id={item_id}
     min_points: 50                    # 0 or more
     max_items: 50                     # 1–100
+
+advisory:
+  cisa_kev:
+    feed_url: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+    lookback_days: 30                 # 1–3650; only entries added in the last N days
 ```
 
 The file is validated on load. The following stop startup with a readable `SourcesConfigError`:
@@ -199,9 +213,9 @@ The file is validated on load. The following stop startup with a readable `Sourc
 - **Another source of an existing type** (e.g. a new RSS feed): add an entry to `sources.yaml`. No code changes.
 - **A new kind of source** (e.g. Reddit):
   1. Add a settings model to `interfaces/source_config_interfaces.py` and a matching section to `sources.yaml`.
-  2. Create a collector in `collectors/web/` or `collectors/social/` that extends `BaseCollector` and implements:
+  2. Create a collector in `collectors/web/`, `collectors/social/` or `collectors/advisory/` that extends `BaseCollector` and implements:
      - `fetch_records()`: makes the network calls through `SourceHttpClient`. Raises `FetchError` or `SourceFormatError` on failure.
-     - `parse_record()`: converts one raw record into a `WebArticle` or `SocialPost`.
+     - `parse_record()`: converts one raw record into a `WebArticle`, `SocialPost` or `Advisory`.
   3. Add the collector in `build_collectors()` in `sources.py`.
   4. Add tests under `tests/functionality/data_collection/collectors/`, using `httpx.MockTransport` instead of real network calls.
 
@@ -216,13 +230,14 @@ Run `pytest` from `backend/`. All tests are deterministic and make no network ca
 | `test_sources.py` | Loading and validating config, enabled/disabled sources; also checks the shipped `sources.yaml` is valid |
 | `collectors/web/test_rss_feed.py` | Feed parsing, HTML sanitisation, stable IDs, truncation, invalid config |
 | `collectors/social/test_hacker_news.py` | Parsing hits, removing personal data, configured URLs and thresholds, invalid config |
+| `collectors/advisory/test_cisa_kev.py` | Parsing entries, lookback window, ransomware mapping, skipping bad records, CVE ID validation, invalid config |
 
 ---
 
 ## Next steps
 
 1. Postgres schema and storage for collected items, with de-duplication by `item_id`.
-2. More collectors: GitHub Security Advisories, CISA KEV, OSV/NVD, Reddit, Mastodon.
+2. More collectors: GitHub Security Advisories, OSV/NVD, Reddit, Mastodon.
 3. Scheduled collection runs.
 4. An endpoint that starts a run and returns a job ID, plus an endpoint to check its status.
 5. The data_processing module.

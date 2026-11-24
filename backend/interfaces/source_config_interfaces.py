@@ -74,8 +74,25 @@ class SocialSourcesConfig(StrictConfigModel):
     hacker_news: HackerNewsConfig | None = Field(default=None, description="Hacker News settings")
 
 
+class CisaKevConfig(StrictConfigModel):
+    """Settings for the CISA Known Exploited Vulnerabilities (KEV) catalog collector."""
+
+    enabled: bool = Field(default=True, description="Set to false to disable this collector")
+    feed_url: HttpUrl = Field(description="KEV JSON feed URL (https only)")
+    lookback_days: int = Field(default=30, ge=1, le=3650, description="Only collect entries added to the catalog in the last N days (1-3650)")
+
+    _check_url = field_validator("feed_url")(_require_https)
+
+
+class AdvisorySourcesConfig(StrictConfigModel):
+    """All structured vulnerability/advisory sources. Each is optional - omit it to disable."""
+
+    cisa_kev: CisaKevConfig | None = Field(default=None, description="CISA KEV catalog settings")
+
+
 class SourcesConfig(StrictConfigModel):
-    """Root of sources.yaml. Web and social sources are kept in separate sections."""
+    """Root of sources.yaml. Web, social and advisory sources are kept in separate sections."""
 
     web: WebSourcesConfig = Field(default_factory=WebSourcesConfig)
     social: SocialSourcesConfig = Field(default_factory=SocialSourcesConfig)
+    advisory: AdvisorySourcesConfig = Field(default_factory=AdvisorySourcesConfig)
